@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Boiler FVE — teplota</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #14181d;
+      --panel: #1d242c;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --line: #3d9cf0;
+      --ok: #3dbe7a;
+      --bad: #e25b5b;
+      --border: #2c3540;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding: 20px 24px 12px;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 4px; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 0.9rem; }
+    .now {
+      text-align: right;
+    }
+    .now .val { font-size: 2.4rem; font-weight: 650; letter-spacing: -0.03em; }
+    .now .unit { font-size: 1.1rem; color: var(--muted); }
+    .bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 16px;
+      align-items: center;
+      padding: 0 24px 16px;
+    }
+    .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      background: var(--bad);
+    }
+    .dot.ok { background: var(--ok); }
+    .stat { color: var(--muted); font-size: 0.9rem; }
+    button {
+      background: #2a6fad;
+      color: #fff;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:disabled { opacity: 0.5; cursor: default; }
+    button.secondary { background: #2c3540; }
+    .chart-wrap {
+      margin: 0 24px 24px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 16px 8px;
+      height: 420px;
+    }
+    #msg { color: var(--muted); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Boiler FVE</h1>
+      <div class="sub">Teplota z UNO přes USB</div>
+    </div>
+    <div class="now">
+      <div class="val"><span id="temp">--.-</span><span class="unit"> °C</span></div>
+      <div class="sub" id="when">čekám na data</div>
+    </div>
+  </header>
+  <div class="bar">
+    <span class="stat"><span id="comDot" class="dot"></span><span id="com">COM —</span></span>
+    <span class="stat"><span id="rtcDot" class="dot"></span>RTC</span>
+    <span class="stat"><span id="sdDot" class="dot"></span>SD</span>
+    <span class="stat"><span id="dsDot" class="dot"></span>DS18B20</span>
+    <span class="stat" id="npoints">0 bodů</span>
+    <button type="button" id="btnDump">Načíst SD (dnes)</button>
+    <button type="button" id="btnDumpAll" class="secondary">Načíst celou SD</button>
+    <span id="msg"></span>
+  </div>
+  <div class="chart-wrap">
+    <canvas id="chart"></canvas>
+  </div>
+  <script>
+    const chart = new Chart(document.getElementById("chart"), {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [{
+          label: "Teplota °C",
+          data: [],
+          borderColor: "#3d9cf0",
+          backgroundColor: "rgba(61,156,240,0.12)",
+          fill: true,
+          tension: 0.15,
+          pointRadius: 0,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          x: {
+            ticks: { color: "#8b9aab", maxTicksLimit: 8, maxRotation: 0 },
+            grid: { color: "#2c3540" }
+          },
+          y: {
+            ticks: { color: "#8b9aab" },
+            grid: { color: "#2c3540" },
+            title: { display: true, text: "°C", color: "#8b9aab" }
+          }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    function setDot(id, ok) {
+      document.getElementById(id).classList.toggle("ok", !!ok);
+    }
+
+    function fmtTick(iso) {
+      if (!iso) return "";
+      const d = new Date(iso.replace(" ", "T"));
+      if (Number.isNaN(d.getTime())) return iso.slice(11, 16);
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mi = String(d.getMinutes()).padStart(2, "0");
+      return dd + "." + mm + " " + hh + ":" + mi;
+    }
+
+    async function refresh() {
+      const r = await fetch("/api/data");
+      const j = await r.json();
+      setDot("comDot", j.connected);
+      setDot("rtcDot", j.rtc);
+      setDot("sdDot", j.sd);
+      setDot("dsDot", j.ds18);
+      document.getElementById("com").textContent = j.port || "COM —";
+      document.getElementById("npoints").textContent = j.points.length + " bodů";
+      if (j.temp != null) {
+        document.getElementById("temp").textContent = Number(j.temp).toFixed(1);
+        document.getElementById("when").textContent = j.last_t || "";
+      }
+      const labels = j.points.map(p => fmtTick(p.t));
+      const data = j.points.map(p => p.temp);
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = data;
+      chart.update("none");
+    }
+
+    async function dump(all) {
+      const btn = all ? document.getElementById("btnDumpAll") : document.getElementById("btnDump");
+      const msg = document.getElementById("msg");
+      btn.disabled = true;
+      msg.textContent = "čtu SD…";
+      try {
+        const r = await fetch(all ? "/api/dump?all=1" : "/api/dump", { method: "POST" });
+        const j = await r.json();
+        msg.textContent = j.ok ? ("načteno " + j.added + " řádků") : (j.error || "chyba");
+        await refresh();
+      } catch (e) {
+        msg.textContent = "chyba spojení";
+      }
+      btn.disabled = false;
+    }
+
+    document.getElementById("btnDump").onclick = () => dump(false);
+    document.getElementById("btnDumpAll").onclick = () => dump(true);
+    refresh();
+    setInterval(refresh, 1000);
+  </script>
+</body>
+</html>

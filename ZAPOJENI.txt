@@ -1,0 +1,198 @@
+Zapojení Boiler_FVE
+===================
+
+Arduino UNO + TZT Data Logger Shield V1.0 + LCD 1602 Keypad Shield
+Cíl: zobrazit teplotu boileru a ukládat logy na SD kartu s časem z RTC.
+
+
+SKLÁDÁNÍ
+--------
+                    nahoře
+     ┌─────────────────────────┐
+     │  LCD 1602 + keyboard    │  displej a tlačítka
+     ├─────────────────────────┤
+     │  TZT Data Logger V1.0   │  SD karta + RTC DS1307
+     ├─────────────────────────┤
+     │  Arduino UNO            │
+     └─────────────────────────┘
+                    dole
+
+  - LCD musí být nahoře (jinak není vidět).
+  - Logger uprostřed potřebuje stacking header (zdířky nahoře).
+    Pokud má jen piny dolů, dopájej 4× female stacking header.
+  - SD kartu zasuň PŘED složením, slot bývá z boku / částečně pod LCD.
+  - Po nasazení zkontroluj, že spodní piny loggeru nesedí na součástky UNO.
+
+
+D10 — POVINNÉ ODPOJENÍ PODSVÍCENÍ (jinak karta nefunguje)
+-------------------------------------------------------
+Oba shieldy používají D10:
+
+  LCD keypad  = báze transistoru podsvícení
+  Data logger = Chip Select SD karty
+
+Firmware drží D10 jako OUTPUT HIGH, když karta není vybraná (SPI master + CS).
+
+Skutečné zapojení (tato sestava):
+  D10 UNO → logger (RTC/SD)  spojené   = CS karty
+  D10 logger → LCD           přerušené = podsvícení nešlape do CS
+
+  Neosazený 2×3 jumper vedle trimru kontrastu NENÍ BL.
+  Na klonech tam bývá jen nepájivá pozice (volitelné piny). Neosazovat.
+
+  A) Jumper BL na LCD (kdyby byl osazený): VYNDAT.
+  B) Jinak stačí řez D10 mezi loggerem a LCD (to je ten správný).
+     Nesmí se přerušit D10 mezi UNO a loggerem.
+  C) Náhradní CS na A2 jen kdyby D10 na loggeru nešlo použít.
+     V config.h: #define PIN_SD_CS A2
+
+Po odpojení LCD: podsvícení svítí z LCD (5 V), karta má D10 pro sebe.
+Karta: SDHC do 32 GB, FAT32 (ne exFAT).
+  16 GB z výroby bývá exFAT — Arduino ji nevidí. Na PC: Formátovat → FAT32.
+
+
+PŘIDĚLENÍ PINŮ
+--------------
+  LCD RS          D8
+  LCD EN          D9
+  LCD D4–D7       D4 D5 D6 D7
+  Tlačítka        A0  (odporový žebřík: Right/Up/Down/Left/Select)
+  SD CS           D10   (po odpojení podsvícení)
+  SD MOSI         D11
+  SD MISO         D12
+  SD SCK          D13
+  RTC SDA         A4
+  RTC SCL         A5
+  DS18B20 DATA    A1    (1-Wire; nahoře na LCD keypadu)
+
+
+TEPLOTA — DS18B20
+-----------------
+Vodotěsná sonda (nerezová trubička) na výstup / jímku boileru.
+
+Po složení UNO + logger + LCD nejsou D2/D3 dostupné.
+Čidlo jde na analogový hřebínek LCD (průchozí piny UNO, často bez potisku).
+
+Pohled shora: LCD čitelný, tlačítka dole, USB UNO vlevo.
+Hřebínek je vpravo dole (u trimru / pravý okraj). Pořadí jako na UNO:
+
+  …  5V   GND   VIN  |  A0   A1   A2   A3   A4   A5
+  napájení               tlač. DATA      RTC  RTC
+                         NE    ★              NE
+
+  A0 = první analog po VIN (směrem od USB / od 5V). Nepoužívej — tlačítka.
+  A1 = druhý analog po VIN. Sem DATA čidla.
+  A5 = krajní pin u rohu desky.
+
+Když počítáš od vnějšího rohu (od trimru): A5, A4, A3, A2, A1, A0
+— A1 je pátý od rohu, druhý od VIN.
+
+  DS18B20 VDD  ── 5V
+  DS18B20 GND  ── GND
+  DS18B20 DATA ── A1
+                    └──[ 4,7 kΩ ]── 5V     pull-up na DATA
+
+  3 vodiče (ne parazitní napájení). Typické barvy:
+    červená = VDD, černá = GND, žlutá = DATA.
+
+  Rozsah čidla −55…+125 °C, pro vodu v boileru stačí.
+
+
+RTC
+---
+  Obvod DS1307 na loggeru, I2C adresa 0x68.
+  Baterie CR1220 3 V do držáku (záloha při výpadku 5V).
+  Bez baterie / se špatnou zálohou se po několika dnech nebo po odpojení
+  USB datum a čas ztratí — u TZT V1.0 je to známá vada klonu, ne firmware.
+
+  Kontrola:
+  - CR1220 v držáku, plus na zemi (plochá strana = mínus).
+  - Na pinu VBAT DS1307 má být ~3 V i bez USB.
+  - Mnoho TZT má nabíjecí obvod pro LIR1220 (3,6 V). CR1220 se nabíjet
+    nesmí — po pár dnech je vybitá. Buď LIR1220, nebo CR1220 a přerušit
+    nabíjecí diodu/odpor k VCC (zůstane jen baterie → VBAT).
+  - Držák často nemá kontakt; přihnout pájku / zkontrolovat spoj k VBAT.
+
+  Když USB zůstane zapojené a čas stejně „umře“ za dny: vadný krystal
+  32 kHz na shieldu. Náhrada: DS3231 místo DS1307 (stejná adresa 0x68).
+
+  Firmware při roku < 2020 otevře „Nastavit cas“.
+  Po odpojení RTC čipu běží čas dál v UNO (stav RTC:SW). Po restartu
+  bez RTC je potřeba čas znovu nastavit — UNO ho bez čipu neudrží.
+
+  První spuštění: pokud RTC nemá platný čas, firmware otevře
+  obrazovku „Nastavit cas“.
+
+  Klávesnice:
+    LEFT/RIGHT  pole (den, měsíc, rok, hodina, minuta)
+    UP/DOWN     hodnota
+    SELECT      uložit
+    LEFT na dni zpět bez uložení
+
+  Nebo USB Serial 115200:
+    SET 2026-08-26 21:30:00
+    STATUS
+    DUMP              dnešní CSV
+    DUMP ALL          všechny CSV na kartě
+
+
+GRAF V PROHLÍŽEČI (USB → PC)
+----------------------------
+  1. Nahraj firmware (LIVE + DUMP).
+  2. UNO USB do PC. PlatformIO monitor / Arduino Serial zavři
+     (port smí otevřít jen jeden program).
+  3. Zavři Serial monitor. V kořeni projektu:
+       pip install -r requirements.txt
+       python web/server.py
+     nebo s portem:
+       python web/server.py --port COM10
+  4. Prohlížeč se otevře na http://127.0.0.1:8080/
+     (otevření COM UNO restartuje — to je v pořádku).
+
+  Bez UNO (jen vzhled grafu):  python web/server.py --demo
+
+  Živá teplota jde po Serial každé ~2 s (LIVE;…).
+  Historie ze SD: tlačítko „Načíst SD“ na stránce.
+
+
+SD KARTA
+--------
+  FAT16 nebo FAT32 (ne exFAT). Arduino UNO knihovna exFAT neumí.
+  16 GB i 32 GB SDHC jdou, pokud jsou FAT32. Windows často 16 GB naformátuje
+  jako exFAT → na LCD zůstane SD? / SD ERR.
+
+  Formát na PC: pravé tlačítko na kartě → Formátovat → souborový systém FAT32
+  (ne exFAT, ne NTFS). Alokační jednotka 32 kB nebo výchozí.
+  Když FAT32 v nabídce není: program "SD Card Formatter" nebo guiformat.
+
+  Soubory: jeden CSV na den, název RRRRMMDD.CSV
+  Příklad: 20260826.CSV
+
+    cas;teplota_c
+    2026-08-26 21:28:00;48.5
+
+  Středník kvůli českému Excelu.
+
+
+OVLÁDÁNÍ
+--------
+  LEFT / RIGHT     obrazovky: stav → interval → min/max → hlavní
+  SELECT           na hlavní: zap/vyp zápis (LOG / PAU)
+                   na min/max: vynulovat min/max dne
+  SELECT 1,5 s     nastavení času
+  UP / DOWN        na intervalu: 10 s, 30 s, 1 min, 5 min, 15 min
+
+  Hlavní obrazovka:
+    26.08.26  21:28
+    48.5C LOG 1m
+
+  LOG = zapisuje, PAU = pauza, CIDLO = čidlo chybí, SD? = karta nejde
+
+
+NÁKUP / DOPLNIT
+---------------
+  - CR1220 do RTC
+  - SD karta 2–8 GB FAT32
+  - DS18B20 vodotěsná + 4,7 kΩ
+  - stacking headers na logger, pokud je nemá
+  - úprava D10 (jumper / řez spoje) PŘED prvním zapnutím obou shieldů
